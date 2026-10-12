@@ -14,7 +14,7 @@ const normalize = (u) => ({
   status: u.status || (u.id % 4 === 0 ? "Inactive" : "Active"),
 });
 
-const delay = (ms = 600) => new Promise((r) => setTimeout(r, ms));
+const delay = (ms = 500) => new Promise((r) => setTimeout(r, ms));
 
 function readCache() {
   try {
@@ -31,20 +31,23 @@ function writeCache(list) {
   } catch {}
 }
 
-export function resetDemoData() {
-  localStorage.removeItem(STORAGE_KEY);
-}
-
-export async function getEmployees() {
+async function ensureList() {
   const cached = readCache();
   if (cached) return cached;
   await delay();
   const res = await fetch(API_URL);
   if (!res.ok) throw new Error("Failed to fetch employees");
-  const data = await res.json();
-  const list = data.map(normalize);
+  const list = (await res.json()).map(normalize);
   writeCache(list);
   return list;
+}
+
+export function resetDemoData() {
+  localStorage.removeItem(STORAGE_KEY);
+}
+
+export async function getEmployees() {
+  return ensureList();
 }
 
 export async function getEmployee(id) {
@@ -54,39 +57,73 @@ export async function getEmployee(id) {
   return emp;
 }
 
+/* ---------- Duplicate email check ---------- */
+export async function isEmailTaken(email, excludeId = null) {
+  const list = await getEmployees();
+  const target = String(email).trim().toLowerCase();
+  return list.some(
+    (e) => String(e.email).trim().toLowerCase() === target && e.id !== excludeId
+  );
+}
+
 export async function createEmployee(employee) {
   await delay();
-  const res = await fetch(API_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(employee),
-  });
-  if (!res.ok) throw new Error("Failed to create employee");
-  const list = readCache() || [];
-  const created = { ...employee, id: list.reduce((m, e) => Math.max(m, e.id), 0) + 1 };
+
+  // Best-effort sync with mock API (it never stores our data — that's fine)
+  try {
+    await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(employee),
+    });
+  } catch {}
+
+  const list = await ensureList();
+  const created = {
+    ...employee,
+    id: list.reduce((m, e) => Math.max(m, e.id), 0) + 1,
+  };
   writeCache([...list, created]);
   return created;
 }
 
 export async function updateEmployee(id, employee) {
   await delay();
-  const res = await fetch(`${API_URL}/${id}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(employee),
-  });
-  if (!res.ok) throw new Error("Failed to update employee");
-  const list = readCache() || [];
-  const updated = { ...employee, id: Number(id) };
-  writeCache(list.map((e) => (e.id === updated.id ? updated : e)));
+  const empId = Number(id);
+  const list = await ensureList();
+
+  if (!list.some((e) => e.id === empId)) {
+    throw new Error("Employee not found");
+  }
+
+  
+  try {
+    await fetch(`${API_URL}/${empId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(employee),
+    });
+  } catch {}
+
+  const updated = { ...employee, id: empId };
+  writeCache(list.map((e) => (e.id === empId ? updated : e)));
   return updated;
 }
 
 export async function deleteEmployee(id) {
   await delay();
-  const res = await fetch(`${API_URL}/${id}`, { method: "DELETE" });
-  if (!res.ok) throw new Error("Failed to delete employee");
-  const list = readCache() || [];
-  writeCache(list.filter((e) => e.id !== Number(id)));
-  return Number(id);
+  const empId = Number(id);
+  const list = await ensureList();
+
+  if (!list.some((e) => e.id === empId)) {
+    throw new Error("Employee not found");
+  }
+
+  // Same as update: ignore mock API 404 for locally created records
+  try {
+    await fetch(`${API_URL}/${empId}`, { method: "DELETE" });
+  } catch {}
+
+  writeCache(list.filter((e) => e.id !== empId));
+  return empId;
 }

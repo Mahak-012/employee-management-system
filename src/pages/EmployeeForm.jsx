@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { getEmployee, createEmployee, updateEmployee } from "../api/employeeApi.js";
+import { getEmployee, createEmployee, updateEmployee, isEmailTaken } from "../api/employeeApi.js";
 import Loader from "../components/Loader.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 
@@ -10,11 +10,13 @@ const DEPARTMENTS = ["Engineering", "Marketing", "Sales", "Human Resources", "Fi
 const initials = (name = "") =>
   name.split(" ").filter(Boolean).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
 
+const EMAIL_RE = /^\S+@\S+\.\S+$/;
+
 function validate(form) {
   const errs = {};
   if (!form.name.trim()) errs.name = "Employee name is required";
   if (!form.email.trim()) errs.email = "Email is required";
-  else if (!/^\S+@\S+\.\S+$/.test(form.email.trim())) errs.email = "Please enter a valid email address";
+  else if (!EMAIL_RE.test(form.email.trim())) errs.email = "Please enter a valid email address";
   if (!form.department) errs.department = "Department is required";
   if (!form.position.trim()) errs.position = "Position is required";
   if (form.salary === "") errs.salary = "Salary is required";
@@ -33,6 +35,7 @@ export default function EmployeeForm() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  const [emailCheck, setEmailCheck] = useState({ status: "idle", message: "" });
 
   useEffect(() => {
     document.title = isEdit ? "Edit Employee · EmployeeHub" : "Add Employee · EmployeeHub";
@@ -64,6 +67,27 @@ export default function EmployeeForm() {
     const updated = { ...form, [name]: value };
     setForm(updated);
     if (submitted) setErrors(validate(updated));
+    if (name === "email") setEmailCheck({ status: "idle", message: "" });
+  };
+
+  /* Live duplicate check on blur — nice UX touch */
+  const checkEmailAvailability = async () => {
+    const email = form.email.trim();
+    if (!email || !EMAIL_RE.test(email)) {
+      setEmailCheck({ status: "idle", message: "" });
+      return;
+    }
+    setEmailCheck({ status: "checking", message: "Checking email availability..." });
+    try {
+      const taken = await isEmailTaken(email, isEdit ? Number(id) : null);
+      setEmailCheck(
+        taken
+          ? { status: "taken", message: "This email is already registered" }
+          : { status: "free", message: "Email is available ✓" }
+      );
+    } catch {
+      setEmailCheck({ status: "idle", message: "" });
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -74,9 +98,20 @@ export default function EmployeeForm() {
       setErrors(errs);
       return;
     }
+
     setSaving(true);
     setError("");
     try {
+      /* ---------- Duplicate email validation (case-insensitive) ---------- */
+      const taken = await isEmailTaken(form.email, isEdit ? Number(id) : null);
+      if (taken) {
+        setSaving(false);
+        setErrors({ email: "This email is already registered. Please use a different email." });
+        setEmailCheck({ status: "taken", message: "This email is already registered" });
+        document.getElementById("email")?.focus();
+        return;
+      }
+
       const payload = {
         ...form,
         name: form.name.trim(),
@@ -123,8 +158,13 @@ export default function EmployeeForm() {
             <div className="form-group">
               <label htmlFor="email">Email *</label>
               <input id="email" name="email" type="email" value={form.email} onChange={handleChange}
+                onBlur={checkEmailAvailability}
                 placeholder="e.g. ali@company.com" className={errors.email ? "input-error" : ""} />
-              {errors.email && <p className="error-text">{errors.email}</p>}
+              {errors.email ? (
+                <p className="error-text">{errors.email}</p>
+              ) : emailCheck.message ? (
+                <p className={`hint-text hint-${emailCheck.status}`}>{emailCheck.message}</p>
+              ) : null}
             </div>
           </div>
 
